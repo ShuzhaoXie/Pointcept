@@ -63,12 +63,49 @@ class KeyLUT:
 _key_lut = KeyLUT()
 
 
+# def xyz2key_48(
+#     x: torch.Tensor,
+#     y: torch.Tensor,
+#     z: torch.Tensor,
+#     b: Optional[Union[torch.Tensor, int]] = None,
+#     depth: int = 16,
+# ):
+#     r"""Encodes :attr:`x`, :attr:`y`, :attr:`z` coordinates to the shuffled keys
+#     based on pre-computed look up tables. The speed of this function is much
+#     faster than the method based on for-loop.
+
+#     Args:
+#       x (torch.Tensor): The x coordinate.
+#       y (torch.Tensor): The y coordinate.
+#       z (torch.Tensor): The z coordinate.
+#       b (torch.Tensor or int): The batch index of the coordinates, and should be
+#           smaller than 32768. If :attr:`b` is :obj:`torch.Tensor`, the size of
+#           :attr:`b` must be the same as :attr:`x`, :attr:`y`, and :attr:`z`.
+#       depth (int): The depth of the shuffled key, and must be smaller than 17 (< 17).
+#     """
+
+#     EX, EY, EZ = _key_lut.encode_lut(x.device)
+#     x, y, z = x.long(), y.long(), z.long()
+
+#     mask = 255 if depth > 8 else (1 << depth) - 1
+#     key = EX[x & mask] | EY[y & mask] | EZ[z & mask]
+#     if depth > 8:
+#         mask = (1 << (depth - 8)) - 1
+#         key16 = EX[(x >> 8) & mask] | EY[(y >> 8) & mask] | EZ[(z >> 8) & mask]
+#         key = key16 << 24 | key
+
+#     if b is not None:
+#         b = b.long()
+#         key = b << 48 | key
+
+#     return key
+
 def xyz2key(
     x: torch.Tensor,
     y: torch.Tensor,
     z: torch.Tensor,
     b: Optional[Union[torch.Tensor, int]] = None,
-    depth: int = 16,
+    depth: int = 20,
 ):
     r"""Encodes :attr:`x`, :attr:`y`, :attr:`z` coordinates to the shuffled keys
     based on pre-computed look up tables. The speed of this function is much
@@ -81,40 +118,76 @@ def xyz2key(
       b (torch.Tensor or int): The batch index of the coordinates, and should be
           smaller than 32768. If :attr:`b` is :obj:`torch.Tensor`, the size of
           :attr:`b` must be the same as :attr:`x`, :attr:`y`, and :attr:`z`.
-      depth (int): The depth of the shuffled key, and must be smaller than 17 (< 17).
+      depth (int): The depth of the shuffled key, and must be smaller than 21 (< 21).
     """
 
     EX, EY, EZ = _key_lut.encode_lut(x.device)
     x, y, z = x.long(), y.long(), z.long()
 
-    mask = 255 if depth > 8 else (1 << depth) - 1
-    key = EX[x & mask] | EY[y & mask] | EZ[z & mask]
-    if depth > 8:
-        mask = (1 << (depth - 8)) - 1
-        key16 = EX[(x >> 8) & mask] | EY[(y >> 8) & mask] | EZ[(z >> 8) & mask]
-        key = key16 << 24 | key
+    # mask = 255 if depth > 8 else (1 << depth) - 1
+    # key = EX[x & mask] | EY[y & mask] | EZ[z & mask]
+    # if depth > 8:
+    #     mask = (1 << (depth - 8)) - 1
+    #     key16 = EX[(x >> 8) & mask] | EY[(y >> 8) & mask] | EZ[(z >> 8) & mask]
+    #     key = key16 << 24 | key
+    key = torch.zeros_like(x, dtype=torch.long)
+
+    num_blocks = (depth + 7) // 8  # 每 8 位为一块
+    for i in range(num_blocks):
+        shift = i * 8
+        mask = 0xFF  # 8 位掩码
+        # 对每段 x, y, z 分别查表
+        kx = EX[(x >> shift) & mask]
+        ky = EY[(y >> shift) & mask]
+        kz = EZ[(z >> shift) & mask]
+        block = kx | ky | kz
+        key |= block << (3 * shift)  # 每 8bit 扩展为 24bit，因此左移 3*shift
 
     if b is not None:
         b = b.long()
-        key = b << 48 | key
+        key = b << 60 | key
 
     return key
 
 
-def key2xyz(key: torch.Tensor, depth: int = 16):
+# def key2xyz_48(key: torch.Tensor, depth: int = 16):
+#     r"""Decodes the shuffled key to :attr:`x`, :attr:`y`, :attr:`z` coordinates
+#     and the batch index based on pre-computed look up tables.
+
+#     Args:
+#       key (torch.Tensor): The shuffled key.
+#       depth (int): The depth of the shuffled key, and must be smaller than 17 (< 17).
+#     """
+
+#     DX, DY, DZ = _key_lut.decode_lut(key.device)
+#     x, y, z = torch.zeros_like(key), torch.zeros_like(key), torch.zeros_like(key)
+
+#     b = key >> 48
+#     key = key & ((1 << 48) - 1)
+
+#     n = (depth + 2) // 3
+#     for i in range(n):
+#         k = key >> (i * 9) & 511
+#         x = x | (DX[k] << (i * 3))
+#         y = y | (DY[k] << (i * 3))
+#         z = z | (DZ[k] << (i * 3))
+
+#     return x, y, z, b
+
+def key2xyz(key: torch.Tensor, depth: int = 20):
     r"""Decodes the shuffled key to :attr:`x`, :attr:`y`, :attr:`z` coordinates
     and the batch index based on pre-computed look up tables.
 
     Args:
       key (torch.Tensor): The shuffled key.
-      depth (int): The depth of the shuffled key, and must be smaller than 17 (< 17).
+      depth (int): The depth of the shuffled key, and must be smaller than 21 (< 21).
     """
 
     DX, DY, DZ = _key_lut.decode_lut(key.device)
     x, y, z = torch.zeros_like(key), torch.zeros_like(key), torch.zeros_like(key)
 
-    b = key >> 48
-    key = key & ((1 << 48) - 1)
+    b = key >> 60
+    key = key & ((1 << 60) - 1)
 
     n = (depth + 2) // 3
     for i in range(n):
