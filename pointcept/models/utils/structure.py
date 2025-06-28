@@ -7,6 +7,7 @@ except ImportError:
     ocnn = None
 from addict import Dict
 from typing import List
+import torch.distributed as dist
 
 from pointcept.models.utils.serialization import encode
 from pointcept.models.utils import (
@@ -74,7 +75,7 @@ class Point(Dict):
             depth = int(self.grid_coord.max() + 1).bit_length()
         self["serialized_depth"] = depth
         # Maximum bit length for serialization code is 63 (int64)
-        assert depth * 3 + len(self.offset).bit_length() <= 63
+        assert depth * 3 + len(self.offset).bit_length() <= 63, f"length: {depth * 3 + len(self.offset).bit_length()}, offset: {len(self.offset).bit_length()}, rank: {dist.get_rank()}"
         # Here we follow OCNN and set the depth limitation to 16 (48bit) for the point position.
         # Although depth is limited to less than 16, we can encode a 655.36^3 (2^16 * 0.01) meter^3
         # cube with a grid size of 0.01 meter. We consider it is enough for the current stage.
